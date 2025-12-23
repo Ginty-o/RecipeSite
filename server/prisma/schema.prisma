@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum BlockType {
+  TEXT
+  PHOTO
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  recipes Recipe[]
+}
+
+model Recipe {
+  id          String      @id @default(cuid())
+  name        String
+  ownerId     String
+  owner       User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  blocks      RecipeBlock[]
+  recipeTags  RecipeTag[]
+
+  @@index([name])
+  @@index([ownerId])
+}
+
+model RecipeBlock {
+  id        String    @id @default(cuid())
+  recipeId  String
+  recipe    Recipe    @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  order     Int
+  type      BlockType
+  text      String?
+  photoUrl  String?
+
+  @@index([recipeId, order])
+}
+
+model Tag {
+  id        String     @id @default(cuid())
+  name      String
+  color     String
+  createdAt DateTime   @default(now())
+
+  recipeTags RecipeTag[]
+
+  @@unique([name, color], name: "name_color")
+  @@index([name])
+}
+
+model RecipeTag {
+  recipeId String
+  tagId    String
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  tag      Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([recipeId, tagId])
+  @@index([tagId])
+}

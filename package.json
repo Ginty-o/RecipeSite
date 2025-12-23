@@ -1,0 +1,19 @@
+{
+  "name": "recepie-site",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,client -c green,cyan \"npm -w server run dev\" \"npm -w client run dev\"",
+    "dev:client": "npm -w client run dev",
+    "dev:server": "npm -w server run dev",
+    "build": "npm -w client run build && npm -w server run build",
+    "db:push": "npm -w server run db:push",
+    "db:studio": "npm -w server run db:studio"
+  }
+}
