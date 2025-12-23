@@ -49,6 +49,7 @@ const upload = multer({
 });
 
 function cloudinaryConfigured() {
+  if (process.env.CLOUDINARY_URL) return true;
   return !!(
     process.env.CLOUDINARY_CLOUD_NAME &&
     process.env.CLOUDINARY_API_KEY &&
@@ -58,6 +59,11 @@ function cloudinaryConfigured() {
 
 function configureCloudinaryOnce() {
   if (!cloudinaryConfigured()) return;
+  if (process.env.CLOUDINARY_URL) {
+    cloudinary.config({ cloudinary_url: process.env.CLOUDINARY_URL });
+    return;
+  }
+
   cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
