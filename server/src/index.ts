@@ -12,6 +12,7 @@ import type { DiskStorageOptions } from 'multer';
 import type { Prisma, Role } from '@prisma/client';
 import type { Secret, SignOptions } from 'jsonwebtoken';
 import { v2 as cloudinary } from 'cloudinary';
+import { Storage } from '@google-cloud/storage';
 import { prisma } from './prisma.js';
 import { authOptional, clearAuthCookie, requireAuth, setAuthCookie } from './auth.js';
 import { loginSchema, recipeUpsertSchema, registerSchema } from './validators.js';
@@ -47,6 +48,30 @@ const upload = multer({
   storage: multer.diskStorage(storage),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
+
+function googleStorageConfigured() {
+  return !!(process.env.GCS_BUCKET && (process.env.GCP_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS));
+}
+
+function createGoogleStorageClient(): Storage {
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return new Storage();
+  }
+
+  const raw = process.env.GCP_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error('Missing GCP_SERVICE_ACCOUNT_JSON');
+
+  const creds = JSON.parse(raw) as { client_email?: string; private_key?: string; project_id?: string };
+  const privateKey = creds.private_key?.replace(/\\n/g, '\n');
+
+  return new Storage({
+    projectId: creds.project_id,
+    credentials: {
+      client_email: creds.client_email,
+      private_key: privateKey
+    }
+  });
+}
 
 function cloudinaryConfigured() {
   if (process.env.CLOUDINARY_URL) return true;
@@ -154,34 +179,89 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
 });
 
 // Upload single photo
-app.post('/api/uploads', requireAuth, upload.single('photo'), async (req: Request, res: Response) => {
-  if (!req.file) return res.status(400).json({ error: 'No file' });
+app.post(
+  '/api/uploads',
+  requireAuth,
+  (req: Request, res: Response, next) => {
+    upload.single('photo')(req, res, (err) => {
+      if (!err) return next();
 
-  if (cloudinaryConfigured()) {
-    configureCloudinaryOnce();
-    try {
-      const folder = process.env.CLOUDINARY_FOLDER || 'recepies';
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder,
-        resource_type: 'image'
-      });
-
-      // best-effort cleanup of temp file
-      try {
-        await fs.promises.unlink(req.file.path);
-      } catch {
-        // ignore
+      // Multer uses 500 by default; make it user-friendly.
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Photo too large (max 10MB)' });
+        return res.status(400).json({ error: 'Invalid upload' });
       }
 
-      return res.json({ url: result.secure_url });
+      console.error('Upload middleware error:', err);
+      return res.status(500).json({ error: 'Upload failed' });
+    });
+  },
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+
+      if (cloudinaryConfigured()) {
+        configureCloudinaryOnce();
+        try {
+          const folder = process.env.CLOUDINARY_FOLDER || 'recepies';
+          const result = await cloudinary.uploader.upload(req.file.path, {
+            folder,
+            resource_type: 'image'
+          });
+
+          // best-effort cleanup of temp file
+          try {
+            await fs.promises.unlink(req.file.path);
+          } catch {
+            // ignore
+          }
+
+          return res.json({ url: result.secure_url });
+        } catch (e) {
+          console.error('Cloudinary upload failed:', e);
+          return res.status(500).json({ error: 'Upload failed' });
+        }
+      }
+
+      if (googleStorageConfigured()) {
+        const bucketName = process.env.GCS_BUCKET as string;
+        const storageClient = createGoogleStorageClient();
+        const bucket = storageClient.bucket(bucketName);
+
+        const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const folder = process.env.GCS_FOLDER || 'recepies';
+        const objectName = `${folder}/${req.user?.id ?? 'anon'}/${Date.now()}_${safeName}`;
+
+        await bucket.upload(req.file.path, {
+          destination: objectName,
+          resumable: false,
+          contentType: req.file.mimetype,
+          metadata: {
+            cacheControl: 'public, max-age=31536000, immutable'
+          }
+        });
+
+        // best-effort cleanup of temp file
+        try {
+          await fs.promises.unlink(req.file.path);
+        } catch {
+          // ignore
+        }
+
+        // NOTE: object readability depends on bucket IAM (recommended: bucket grants allUsers Storage Object Viewer)
+        const publicUrl = `https://storage.googleapis.com/${bucketName}/${encodeURI(objectName)}`;
+        return res.json({ url: publicUrl });
+      }
+
+      // Fallback: serve from this server's filesystem (not reliable on many hosts)
+      const url = `/uploads/${req.file.filename}`;
+      return res.json({ url });
     } catch (e) {
+      console.error(e);
       return res.status(500).json({ error: 'Upload failed' });
     }
   }
-
-  const url = `/uploads/${req.file.filename}`;
-  return res.json({ url });
-});
+);
 
 // Recipes list (search by name or tag)
 app.get('/api/recipes', async (req: Request, res: Response) => {
