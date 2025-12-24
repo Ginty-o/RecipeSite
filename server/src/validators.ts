@@ -12,6 +12,7 @@ export const loginSchema = z.object({
 });
 
 export const tagInputSchema = z.object({
+  id: z.string().min(1).optional(),
   name: z.string().min(1).max(40),
   color: z.string().min(1).max(40)
 });

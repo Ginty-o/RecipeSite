@@ -63,7 +63,12 @@ export const api = {
     apiFetch<AuthUser>('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) }),
   logout: () => apiFetch<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 
-  listRecipes: (q: string) => apiFetch<RecipeListItem[]>(`/api/recipes?q=${encodeURIComponent(q)}`),
+  listRecipes: (q: string, tagIds: string[] = []) => {
+    const params = new URLSearchParams();
+    params.set('q', q);
+    if (tagIds.length) params.set('tagIds', tagIds.join(','));
+    return apiFetch<RecipeListItem[]>(`/api/recipes?${params.toString()}`);
+  },
   getRecipe: (id: string) => apiFetch<Recipe>(`/api/recipes/${encodeURIComponent(id)}`),
   createRecipe: (payload: { name: string; tags: Tag[]; blocks: RecipeBlock[] }) =>
     apiFetch<{ id: string }>('/api/recipes', { method: 'POST', body: JSON.stringify(payload) }),
@@ -87,4 +92,6 @@ export const api = {
     }
     return (await res.json()) as { url: string };
   }
+  ,
+  listTags: (q: string) => apiFetch<Tag[]>(`/api/tags?q=${encodeURIComponent(q)}`)
 };

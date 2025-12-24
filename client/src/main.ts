@@ -6,18 +6,36 @@ type AppState = {
   query: string;
   recipes: RecipeListItem[];
   showThumbs: boolean;
+  filterTags: Tag[];
 };
 
 const state: AppState = {
   user: null,
   query: '',
   recipes: [],
-  showThumbs: false
+  showThumbs: false,
+  filterTags: []
 };
 
 let listHost: HTMLElement | null = null;
 let userAreaHost: HTMLElement | null = null;
 let searchInputEl: HTMLInputElement | null = null;
+
+function dedupeTags(list: Tag[]): Tag[] {
+  const seen = new Set<string>();
+  const out: Tag[] = [];
+  for (const t of list) {
+    const key = t.id ? `id:${t.id}` : `nc:${t.name.toLowerCase()}|${t.color.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+function tagKey(t: Tag): string {
+  return t.id ? `id:${t.id}` : `nc:${t.name.toLowerCase()}|${t.color.toLowerCase()}`;
+}
 
 const THEME_KEY = 'theme';
 
@@ -48,6 +66,17 @@ function tagPill(t: Tag) {
   const span = el('span', { class: 'tag' }, t.name);
   span.style.borderColor = t.color;
   span.style.color = t.color;
+  return span;
+}
+
+function removableTagPill(t: Tag, title: string, onRemove: () => void) {
+  const label = el('span', { class: 'tagLabel' }, t.name);
+  const x = el('span', { class: 'tagX', 'aria-hidden': 'true' }, '×');
+  const span = el('span', { class: 'tag tagRemovable', title }, label, x);
+  span.style.borderColor = t.color;
+  span.style.color = t.color;
+  (span as any).onclick = onRemove;
+  (span as any).style.cursor = 'pointer';
   return span;
 }
 
@@ -92,14 +121,104 @@ function renderTopbar(root: HTMLElement) {
     theme === 'dark' ? 'Dark' : 'Light'
   );
 
+  const searchSuggestWrap = el('div', { class: 'suggestWrap searchWrap' });
+  const searchSuggestList = el('div', { class: 'suggestList', style: 'display:none;' });
+  let tagSuggestions: Tag[] = [];
+
+  const clearSearchBtn = el(
+    'button',
+    {
+      class: 'clearBtn',
+      type: 'button',
+      title: 'Clear',
+      onclick: async () => {
+        state.query = '';
+        searchInput.value = '';
+        clearSearchBtn.setAttribute('data-visible', 'false');
+        tagSuggestions = [];
+        searchSuggestList.style.display = 'none';
+        searchSuggestList.replaceChildren();
+        await refreshRecipes();
+        renderList();
+        searchInput.focus();
+      }
+    },
+    '×'
+  );
+  clearSearchBtn.setAttribute('data-visible', state.query ? 'true' : 'false');
+
   const searchInput = el('input', {
     class: 'search',
-    placeholder: 'Search recipes or tags…',
+    placeholder: 'Search recipes…',
     value: state.query,
     oninput: async (e: Event) => {
-      state.query = (e.target as HTMLInputElement).value;
+      const q = (e.target as HTMLInputElement).value;
+      state.query = q;
+      clearSearchBtn.setAttribute('data-visible', q ? 'true' : 'false');
+
+      // Refresh recipe list (name/tag contains) AND show tag suggestions for quick multi-filter.
       await refreshRecipes();
       renderList();
+
+      const trimmed = q.trim();
+      if (!trimmed) {
+        tagSuggestions = [];
+        searchSuggestList.style.display = 'none';
+        searchSuggestList.replaceChildren();
+        return;
+      }
+
+      try {
+        tagSuggestions = await api.listTags(trimmed);
+      } catch {
+        tagSuggestions = [];
+      }
+
+      searchSuggestList.replaceChildren();
+      const filtered = tagSuggestions.filter((t) => !state.filterTags.some((x) => tagKey(x) === tagKey(t)));
+      if (filtered.length === 0) {
+        searchSuggestList.style.display = 'none';
+        return;
+      }
+
+      for (const t of filtered.slice(0, 10)) {
+        const item = el('div', { class: 'suggestItem' }, el('div', {}, t.name), tagPill(t));
+        item.onclick = async () => {
+          state.filterTags = dedupeTags([...state.filterTags, t]);
+          renderFilterTags();
+          searchSuggestList.style.display = 'none';
+          searchSuggestList.replaceChildren();
+          await refreshRecipes();
+          renderList();
+        };
+        searchSuggestList.append(item);
+      }
+
+      searchSuggestList.style.display = 'block';
+    },
+    onkeydown: async (ev: KeyboardEvent) => {
+      if (ev.key !== 'Enter') return;
+      const input = ev.target as HTMLInputElement;
+      if (!input.value.trim()) return;
+
+      // If we have suggestions, allow Enter to add the first unselected tag.
+      if (tagSuggestions.length > 0) {
+        const next = tagSuggestions.find((t) => !state.filterTags.some((x) => tagKey(x) === tagKey(t)));
+        if (next) {
+          ev.preventDefault();
+          state.filterTags = dedupeTags([...state.filterTags, next]);
+          renderFilterTags();
+          searchSuggestList.style.display = 'none';
+          searchSuggestList.replaceChildren();
+          await refreshRecipes();
+          renderList();
+        }
+      }
+    },
+    onblur: () => {
+      window.setTimeout(() => {
+        searchSuggestList.style.display = 'none';
+      }, 150);
     }
   }) as HTMLInputElement;
 
@@ -108,9 +227,29 @@ function renderTopbar(root: HTMLElement) {
   const userArea = el('div', { class: 'right' });
   userAreaHost = userArea;
 
+  const filterTagsHost = el('div', { class: 'tags', style: 'margin-top: 0;' });
+
+  const renderFilterTags = () => {
+    filterTagsHost.replaceChildren();
+    state.filterTags.forEach((t) => {
+      const pill = removableTagPill(t, 'Click to remove filter', async () => {
+        state.filterTags = state.filterTags.filter((x) => tagKey(x) !== tagKey(t));
+        renderFilterTags();
+        await refreshRecipes();
+        renderList();
+      });
+      filterTagsHost.append(pill);
+    });
+  };
+
+  renderFilterTags();
+
+  searchSuggestWrap.append(searchInput, clearSearchBtn, searchSuggestList);
+  const middle = el('div', { class: 'stack' }, searchSuggestWrap, filterTagsHost);
+
   const top = el('div', { class: 'topbar' },
     el('div', { class: 'brand' }, 'Recepies'),
-    searchInput,
+    middle,
     userArea
   );
 
@@ -242,48 +381,76 @@ async function openRecipeModal(id: string) {
 
 function openLoginModal() {
   const email = el('input', { class: 'input', placeholder: 'Email', type: 'email' }) as HTMLInputElement;
-  const displayName = el('input', { class: 'input', placeholder: 'Display name (register only)', type: 'text' }) as HTMLInputElement;
   const password = el('input', { class: 'input', placeholder: 'Password', type: 'password' }) as HTMLInputElement;
+  const displayName = el('input', { class: 'input', placeholder: 'Display name', type: 'text' }) as HTMLInputElement;
 
   const msg = el('div', { class: 'small' }, '');
 
+  let mode: 'login' | 'register' = 'login';
+
+  const displayNameField = el('div', { class: 'field' }, el('div', {}, 'Display name'), displayName);
+
+  const tabs = el('div', { class: 'row' });
+  const loginTab = el('button', { class: 'pill primary', type: 'button' }, 'Login');
+  const registerTab = el('button', { class: 'pill', type: 'button' }, 'Register');
+
+  const submitBtn = el('button', { class: 'pill primary', type: 'button' }, 'Login');
+
+  const updateSubmitLabel = () => {
+    submitBtn.textContent = mode === 'login' ? 'Login' : 'Register';
+  };
+
+  const setMode = (next: 'login' | 'register') => {
+    mode = next;
+    if (mode === 'login') {
+      loginTab.className = 'pill primary';
+      registerTab.className = 'pill';
+      displayNameField.style.display = 'none';
+    } else {
+      loginTab.className = 'pill';
+      registerTab.className = 'pill primary';
+      displayNameField.style.display = '';
+    }
+    msg.textContent = '';
+    updateSubmitLabel();
+  };
+
+  loginTab.onclick = () => setMode('login');
+  registerTab.onclick = () => setMode('register');
+  tabs.append(loginTab, registerTab);
+
+  const onSubmit = async () => {
+    msg.textContent = '';
+    try {
+      const nextUser =
+        mode === 'login'
+          ? await api.login({ email: email.value, password: password.value })
+          : await api.register({ email: email.value, password: password.value, displayName: displayName.value || email.value });
+
+      state.user = nextUser;
+      overlay.remove();
+      renderUserArea();
+    } catch (e: any) {
+      msg.textContent = e?.message ?? (mode === 'login' ? 'Login failed' : 'Register failed');
+    }
+  };
+
+  submitBtn.onclick = onSubmit;
+  password.onkeydown = (ev) => {
+    if (ev.key === 'Enter') onSubmit();
+  };
+
   const body = el('div', {},
+    tabs,
+    el('div', { style: 'height: 10px;' }),
     el('div', { class: 'field' }, el('div', {}, 'Email'), email),
     el('div', { class: 'field' }, el('div', {}, 'Password'), password),
-    el('div', { class: 'field' }, el('div', {}, 'Display name'), displayName),
+    displayNameField,
     msg
   );
 
-  const overlay = modal('Login / Register', body, [
-    el('button', {
-      class: 'pill',
-      type: 'button',
-      onclick: async () => {
-        try {
-          const user = await api.login({ email: email.value, password: password.value });
-          state.user = user;
-          overlay.remove();
-          renderUserArea();
-        } catch (e: any) {
-          msg.textContent = e?.message ?? 'Login failed';
-        }
-      }
-    }, 'Login'),
-    el('button', {
-      class: 'pill primary',
-      type: 'button',
-      onclick: async () => {
-        try {
-          const user = await api.register({ email: email.value, password: password.value, displayName: displayName.value || email.value });
-          state.user = user;
-          overlay.remove();
-          renderUserArea();
-        } catch (e: any) {
-          msg.textContent = e?.message ?? 'Register failed';
-        }
-      }
-    }, 'Register')
-  ]);
+  const overlay = modal('Account', body, [submitBtn]);
+  setMode('login');
 }
 
 function openRecipeEditorModal(existing?: Recipe) {
@@ -294,7 +461,7 @@ function openRecipeEditorModal(existing?: Recipe) {
     ? existing.blocks.map((b) => (b.type === 'TEXT' ? { type: 'TEXT', text: b.text ?? '' } : { type: 'PHOTO', photoUrl: b.photoUrl ?? '' }))
     : [{ type: 'TEXT', text: '' }];
 
-  let tags: Tag[] = existing ? existing.tags.map((t) => ({ name: t.name, color: t.color })) : [];
+  let tags: Tag[] = existing ? existing.tags.map((t) => ({ id: t.id, name: t.name, color: t.color })) : [];
 
   const msg = el('div', { class: 'small' }, '');
 
@@ -381,26 +548,85 @@ function openRecipeEditorModal(existing?: Recipe) {
   const renderTags = () => {
     tagsHost.replaceChildren();
     tags.forEach((t, idx) => {
-      const pill = tagPill(t);
-      pill.style.cursor = 'pointer';
-      pill.title = 'Click to remove';
-      pill.onclick = () => {
+      const pill = removableTagPill(t, 'Click to remove', () => {
         tags.splice(idx, 1);
         renderTags();
-      };
+      });
       tagsHost.append(pill);
     });
   };
 
   const tagName = el('input', { class: 'input', placeholder: 'Tag name', type: 'text' }) as HTMLInputElement;
   const tagColor = el('input', { class: 'input', type: 'color', value: '#2563eb' }) as HTMLInputElement;
+
+  const tagSuggestWrap = el('div', { class: 'suggestWrap', style: 'flex: 1;' });
+  const tagSuggestList = el('div', { class: 'suggestList', style: 'display:none;' });
+  let tagSuggestions: Tag[] = [];
+
+  const addTagToRecipe = (t: Tag) => {
+    const exists = tags.some((x) => tagKey(x) === tagKey(t));
+    if (exists) return;
+    tags = [...tags, t];
+    renderTags();
+  };
+
+  tagName.oninput = async () => {
+    const q = tagName.value.trim();
+    if (!q) {
+      tagSuggestions = [];
+      tagSuggestList.style.display = 'none';
+      tagSuggestList.replaceChildren();
+      return;
+    }
+
+    try {
+      tagSuggestions = await api.listTags(q);
+    } catch {
+      tagSuggestions = [];
+    }
+
+    tagSuggestList.replaceChildren();
+    const filtered = tagSuggestions.filter((t) => !tags.some((x) => tagKey(x) === tagKey(t)));
+    if (filtered.length === 0) {
+      tagSuggestList.style.display = 'none';
+      return;
+    }
+
+    for (const t of filtered.slice(0, 10)) {
+      const item = el('div', { class: 'suggestItem' }, el('div', {}, t.name), tagPill(t));
+      item.onclick = () => {
+        addTagToRecipe(t);
+        tagName.value = '';
+        tagSuggestList.style.display = 'none';
+        tagSuggestList.replaceChildren();
+      };
+      tagSuggestList.append(item);
+    }
+
+    tagSuggestList.style.display = 'block';
+  };
+
+  tagName.onblur = () => {
+    window.setTimeout(() => {
+      tagSuggestList.style.display = 'none';
+    }, 150);
+  };
+
+  tagSuggestWrap.append(tagName, tagSuggestList);
+
   const addTag = el('button', {
     class: 'pill',
     type: 'button',
     onclick: () => {
       const n = tagName.value.trim();
       if (!n) return;
-      tags.push({ name: n, color: tagColor.value });
+      // If suggestions exist, prefer an existing tag.
+      const existingTag = tagSuggestions.find((t) => t.name.toLowerCase() === n.toLowerCase());
+      if (existingTag) {
+        addTagToRecipe(existingTag);
+      } else {
+        addTagToRecipe({ name: n, color: tagColor.value });
+      }
       tagName.value = '';
       renderTags();
     }
@@ -428,7 +654,7 @@ function openRecipeEditorModal(existing?: Recipe) {
     el('div', { class: 'field' }, el('div', {}, 'Recipe name'), name),
     el('div', { class: 'field' },
       el('div', {}, 'Tags (click a tag to remove)'),
-      el('div', { class: 'row' }, tagName, tagColor, addTag),
+      el('div', { class: 'row' }, tagSuggestWrap, tagColor, addTag),
       tagsHost
     ),
     el('div', { class: 'row', style: 'justify-content: flex-start; margin-bottom: 10px;' }, addText, addPhoto),
@@ -509,7 +735,8 @@ async function refreshAuth() {
 }
 
 async function refreshRecipes() {
-  state.recipes = await api.listRecipes(state.query);
+  const ids = state.filterTags.map((t) => t.id).filter((id): id is string => !!id);
+  state.recipes = await api.listRecipes(state.query, ids);
 }
 
 function render() {

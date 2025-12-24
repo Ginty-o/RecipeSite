@@ -140,6 +140,18 @@ a { color: inherit; }
   border: 1px solid var(--border);
 }
 
+.tagRemovable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tagX {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.75;
+}
+
 .thumb {
   width: 72px;
   height: 54px;
@@ -231,4 +243,66 @@ textarea.input {
 .small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggestWrap {
+  position: relative;
+}
+
+.searchWrap .search {
+  padding-right: 40px;
+}
+
+.clearBtn {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.clearBtn[data-visible='true'] {
+  display: inline-flex;
+}
+
+.suggestList {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.suggestItem {
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.suggestItem:hover {
+  background: var(--surface);
 }

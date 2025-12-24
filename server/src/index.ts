@@ -267,16 +267,31 @@ app.post(
 app.get('/api/recipes', async (req: Request, res: Response) => {
   try {
     const q = String(req.query.q ?? '').trim();
+    const tagIds = String(req.query.tagIds ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const whereParts: Prisma.RecipeWhereInput[] = [];
+
+    if (q) {
+      whereParts.push({
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { recipeTags: { some: { tag: { name: { contains: q, mode: 'insensitive' } } } } }
+        ]
+      });
+    }
+
+    if (tagIds.length > 0) {
+      // AND semantics: recipe must have ALL selected tags
+      for (const tagId of tagIds) {
+        whereParts.push({ recipeTags: { some: { tagId } } });
+      }
+    }
 
     const recipes = await prisma.recipe.findMany({
-      where: q
-        ? {
-            OR: [
-              { name: { contains: q, mode: 'insensitive' } },
-              { recipeTags: { some: { tag: { name: { contains: q, mode: 'insensitive' } } } } }
-            ]
-          }
-        : undefined,
+      where: whereParts.length ? { AND: whereParts } : undefined,
       orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
@@ -298,6 +313,25 @@ app.get('/api/recipes', async (req: Request, res: Response) => {
         firstPhotoUrl: r.blocks[0]?.type === 'PHOTO' ? r.blocks[0].photoUrl : null
       }))
     );
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Tag suggestions
+app.get('/api/tags', async (req: Request, res: Response) => {
+  try {
+    const q = String(req.query.q ?? '').trim();
+
+    const tags = await prisma.tag.findMany({
+      where: q ? { name: { contains: q, mode: 'insensitive' } } : undefined,
+      orderBy: [{ name: 'asc' }, { color: 'asc' }],
+      take: 25,
+      select: { id: true, name: true, color: true }
+    });
+
+    return res.json(tags);
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Server error' });
@@ -358,6 +392,8 @@ app.post('/api/recipes', requireAuth, async (req: Request, res: Response) => {
         recipeTags: {
           create: await Promise.all(
             tags.map(async (t) => {
+              if (t.id) return { tagId: t.id };
+
               const tag = await prisma.tag.upsert({
                 where: { name_color: { name: t.name, color: t.color } },
                 update: {},
@@ -404,6 +440,8 @@ app.put('/api/recipes/:id', requireAuth, async (req: Request, res: Response) => 
           deleteMany: {},
           create: await Promise.all(
             tags.map(async (t) => {
+              if (t.id) return { tagId: t.id };
+
               const tag = await prisma.tag.upsert({
                 where: { name_color: { name: t.name, color: t.color } },
                 update: {},
