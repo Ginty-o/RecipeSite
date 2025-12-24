@@ -1,0 +1,17 @@
+name: Keep Render Awake
+permissions: read-all
+on:
+  schedule:
+    # Runs every 5 minutes (UTC)
+    - cron: 5 * * * *
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -fsS https://recipesite-1-7p9j.onrender.com/api/health
