@@ -3,7 +3,7 @@ permissions: read-all
 on:
   schedule:
     # Runs every 5 minutes (UTC)
-    - cron: 5 * * * *
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
