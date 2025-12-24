@@ -2,8 +2,8 @@ name: Keep Render Awake
 permissions: read-all
 on:
   schedule:
-    # Runs every 10 minutes (UTC)
-    - cron: 5 * * * * 
+    # Runs every 5 minutes (UTC)
+    - cron: 5 * * * *
   workflow_dispatch:
 
 jobs:
