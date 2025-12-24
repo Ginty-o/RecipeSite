@@ -109,7 +109,7 @@ function renderTopbar(root: HTMLElement) {
   userAreaHost = userArea;
 
   const top = el('div', { class: 'topbar' },
-    el('div', { class: 'brand' }, 'Brain Damaged Recepies'),
+    el('div', { class: 'brand' }, 'Recepies'),
     searchInput,
     userArea
   );
